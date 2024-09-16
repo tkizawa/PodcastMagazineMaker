@@ -1,0 +1,7 @@
+{
+    "speech_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "speech_region": "resion",
+    "openai_api_key": "xyxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "openai_endpoint": "https://xxxx.openai.azure.com/",
+    "openai_deployment": "xxxxxxxx"
+}
