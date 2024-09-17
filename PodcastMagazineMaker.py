@@ -24,6 +24,28 @@ settings = load_settings()
 if not settings:
     exit()
 
+def load_work_info():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    work_path = os.path.join(script_dir, 'work.json')
+    try:
+        with open(work_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"input_file": "", "output_file": ""}
+    except json.JSONDecodeError:
+        messagebox.showwarning("警告", "work.jsonファイルの形式が正しくありません。デフォルト値を使用します。")
+        return {"input_file": "", "output_file": ""}
+
+def save_work_info(input_file, output_file):
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    work_path = os.path.join(script_dir, 'work.json')
+    work_info = {
+        "input_file": input_file,
+        "output_file": output_file
+    }
+    with open(work_path, 'w') as f:
+        json.dump(work_info, f, indent=2)
+
 def transcribe_audio(audio_file, progress_var, status_label):
     speech_config = speechsdk.SpeechConfig(subscription=settings['speech_key'], region=settings['speech_region'])
     speech_config.speech_recognition_language = "ja-JP"
@@ -125,6 +147,8 @@ def process_audio():
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(article)
 
+            save_work_info(input_file, output_file)  # 処理終了後に work.json に保存
+
             progress_window.destroy()
             messagebox.showinfo("成功", f"処理が完了しました。\n文字起こし: {transcription_file}\n生成記事: {output_file}")
         except Exception as e:
@@ -143,13 +167,18 @@ frame.pack(padx=10, pady=10)
 tk.Label(frame, text="入力音声ファイル (MP3 または WAV):").grid(row=0, column=0, sticky="w")
 input_path = tk.Entry(frame, width=50)
 input_path.grid(row=0, column=1, padx=5, pady=5)
-tk.Button(frame, text="参照", command=lambda: input_path.insert(0, filedialog.askopenfilename(filetypes=[("音声ファイル", "*.mp3 *.wav")]))).grid(row=0, column=2)
+tk.Button(frame, text="参照", command=lambda: input_path.delete(0, tk.END) or input_path.insert(0, filedialog.askopenfilename(filetypes=[("音声ファイル", "*.mp3 *.wav")]))).grid(row=0, column=2)
 
 tk.Label(frame, text="出力テキストファイル:").grid(row=1, column=0, sticky="w")
 output_path = tk.Entry(frame, width=50)
 output_path.grid(row=1, column=1, padx=5, pady=5)
-tk.Button(frame, text="参照", command=lambda: output_path.insert(0, filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown files", "*.md")]))).grid(row=1, column=2)
+tk.Button(frame, text="参照", command=lambda: output_path.delete(0, tk.END) or output_path.insert(0, filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown files", "*.md")]))).grid(row=1, column=2)
 
 tk.Button(frame, text="実行", command=process_audio).grid(row=2, column=1, pady=10)
+
+# work.json から前回の入力を読み込み
+work_info = load_work_info()
+input_path.insert(0, work_info["input_file"])
+output_path.insert(0, work_info["output_file"])
 
 root.mainloop()
