@@ -28,22 +28,36 @@ if not settings:
 def load_work_info():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     work_path = os.path.join(script_dir, 'work.json')
+    default_info = {
+        "input_file": "",
+        "input_type": "audio",
+        "output_file": "",
+        "output_type": "article",
+        "window_geometry": "800x600+100+100"
+    }
     try:
         with open(work_path, 'r') as f:
-            return json.load(f)
+            work_info = json.load(f)
+        # Ensure all required keys are present
+        for key in default_info:
+            if key not in work_info:
+                work_info[key] = default_info[key]
+        return work_info
     except FileNotFoundError:
-        return {"input_file": "", "input_type": "audio", "output_file": ""}
+        return default_info
     except json.JSONDecodeError:
         messagebox.showwarning("警告", "work.jsonファイルの形式が正しくありません。デフォルト値を使用します。")
-        return {"input_file": "", "input_type": "audio", "output_file": ""}
+        return default_info
 
-def save_work_info(input_file, input_type, output_file):
+def save_work_info(input_file, input_type, output_file, output_type, window_geometry):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     work_path = os.path.join(script_dir, 'work.json')
     work_info = {
         "input_file": input_file,
         "input_type": input_type,
-        "output_file": output_file
+        "output_file": output_file,
+        "output_type": output_type,
+        "window_geometry": window_geometry
     }
     with open(work_path, 'w') as f:
         json.dump(work_info, f, indent=2)
@@ -130,10 +144,62 @@ def generate_article(transcript, progress_var, status_label):
 
     return article.strip()
 
+def correct_text(transcript, progress_var, status_label):
+    max_tokens = 2000  # トークン数の上限を設定
+    chunks = [transcript[i:i+max_tokens] for i in range(0, len(transcript), max_tokens)]
+    corrected_chunks = []
+
+    for i, chunk in enumerate(chunks):
+        prompt = f"""以下のテキストを校正してください。誤字脱字を修正し、読みやすく自然な文章に整えてください。
+        また、以下の指示に従ってください：
+        1. 「まあ」と「ええ」という口癖は削除してください。
+        2. 文章を要約せず、元の内容をすべて保持してください。
+        3. 「以下のテキストを校正しました：」などの余分な文言を追加しないでください。
+        4. 校正したテキストのみを出力してください。
+
+        テキスト：
+        {chunk}"""
+
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": settings['openai_api_key']
+        }
+
+        payload = {
+            "messages": [
+                {"role": "system", "content": "あなたは優秀な校正者です。与えられたテキストを丁寧に校正し、読みやすく自然な文章に整えてください。"},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.7
+        }
+
+        status_label.config(text=f"テキスト校正中... ({i+1}/{len(chunks)})")
+        root.update_idletasks()
+
+        response = requests.post(f"{settings['openai_endpoint']}/openai/deployments/{settings['openai_deployment']}/chat/completions?api-version=2023-05-15", headers=headers, json=payload)
+        
+        if response.status_code != 200:
+            raise Exception(f"OpenAI API エラー: {response.status_code} - {response.text}")
+
+        corrected_chunk = response.json()["choices"][0]["message"]["content"].strip()
+        corrected_chunks.append(corrected_chunk)
+
+        progress = (i + 1) / len(chunks) * 100
+        progress_var.set(progress)
+
+    corrected_text = " ".join(corrected_chunks)
+
+    # 最終的なクリーンアップ
+    corrected_text = corrected_text.replace("まあ", "").replace("ええ", "")
+    
+    return corrected_text.strip()
+
 def process_audio():
     input_file = input_path.get()
     input_type = input_type_var.get()
     output_file = output_path.get()
+    output_type = output_type_var.get()
 
     if not input_file or not output_file:
         messagebox.showerror("エラー", "入力ファイルと出力ファイルを指定してください。")
@@ -190,14 +256,19 @@ def process_audio():
 
             progress_var.set(50)
 
-            status_label.config(text="記事生成中...")
-            transcription_text.insert(tk.END, "\n--- 記事生成開始 ---\n")
-            article = generate_article(transcript, progress_var, status_label)
+            if output_type == "article":
+                status_label.config(text="記事生成中...")
+                transcription_text.insert(tk.END, "\n--- 記事生成開始 ---\n")
+                output_content = generate_article(transcript, progress_var, status_label)
+            else:  # output_type == "corrected"
+                status_label.config(text="テキスト校正中...")
+                transcription_text.insert(tk.END, "\n--- テキスト校正開始 ---\n")
+                output_content = correct_text(transcript, progress_var, status_label)
 
             with open(output_file, "w", encoding="utf-8") as f:
-                f.write(article)
+                f.write(output_content)
 
-            save_work_info(input_file, input_type, output_file)
+            save_work_info(input_file, input_type, output_file, output_type, root.geometry())
 
             end_time = datetime.now()
             process_duration = end_time - start_time
@@ -209,7 +280,7 @@ def process_audio():
             transcription_text.see(tk.END)
 
             progress_window.destroy()
-            messagebox.showinfo("成功", f"処理が完了しました。\n文字起こし: {transcription_file}\n生成記事: {output_file}\n\n開始時間: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n終了時間: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n処理時間: {str(process_duration)}")
+            messagebox.showinfo("成功", f"処理が完了しました。\n文字起こし: {transcription_file}\n{'生成記事' if output_type == 'article' else '校正済みテキスト'}: {output_file}\n\n開始時間: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n終了時間: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n処理時間: {str(process_duration)}")
         except Exception as e:
             progress_window.destroy()
             messagebox.showerror("エラー", f"処理中にエラーが発生しました: {str(e)}")
@@ -219,10 +290,16 @@ def process_audio():
 
 # GUIの作成
 root = tk.Tk()
-root.title("ポッドキャスト文字起こしと記事生成")
+root.title("ポッドキャスト文字起こしと記事生成/校正")
 
-frame = tk.Frame(root, padx=10, pady=10)
-frame.pack(padx=10, pady=10)
+# フレームの作成
+frame = tk.Frame(root)
+frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+# グリッドの設定
+frame.columnconfigure(1, weight=1)
+for i in range(5):
+    frame.rowconfigure(i, weight=1)
 
 tk.Label(frame, text="入力情報:").grid(row=0, column=0, sticky="w")
 input_type_var = tk.StringVar(value="audio")
@@ -232,21 +309,45 @@ input_type_radio_audio.grid(row=0, column=1, sticky="w")
 input_type_radio_text.grid(row=0, column=2, sticky="w")
 
 tk.Label(frame, text="入力ファイル:").grid(row=1, column=0, sticky="w")
-input_path = tk.Entry(frame, width=50)
-input_path.grid(row=1, column=1, padx=5, pady=5)
+input_path = tk.Entry(frame)
+input_path.grid(row=1, column=1, padx=5, pady=5, sticky="we")
 tk.Button(frame, text="参照", command=lambda: input_path.delete(0, tk.END) or input_path.insert(0, filedialog.askopenfilename())).grid(row=1, column=2)
 
-tk.Label(frame, text="出力テキストファイル:").grid(row=2, column=0, sticky="w")
-output_path = tk.Entry(frame, width=50)
-output_path.grid(row=2, column=1, padx=5, pady=5)
-tk.Button(frame, text="参照", command=lambda: output_path.delete(0, tk.END) or output_path.insert(0, filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown files", "*.md")]))).grid(row=2, column=2)
+tk.Label(frame, text="出力タイプ:").grid(row=2, column=0, sticky="w")
+output_type_var = tk.StringVar(value="article")
+output_type_radio_article = tk.Radiobutton(frame, text="記事生成", variable=output_type_var, value="article")
+output_type_radio_corrected = tk.Radiobutton(frame, text="テキスト校正", variable=output_type_var, value="corrected")
+output_type_radio_article.grid(row=2, column=1, sticky="w")
+output_type_radio_corrected.grid(row=2, column=2, sticky="w")
 
-tk.Button(frame, text="実行", command=process_audio).grid(row=3, column=1, pady=10)
+tk.Label(frame, text="出力ファイル:").grid(row=3, column=0, sticky="w")
+output_path = tk.Entry(frame)
+output_path.grid(row=3, column=1, padx=5, pady=5, sticky="we")
+tk.Button(frame, text="参照", command=lambda: output_path.delete(0, tk.END) or output_path.insert(0, filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown files", "*.md"), ("Text files", "*.txt")]))).grid(row=3, column=2)
+
+tk.Button(frame, text="実行", command=process_audio).grid(row=4, column=1, pady=10)
 
 # work.json から前回の入力を読み込み
 work_info = load_work_info()
 input_path.insert(0, work_info["input_file"])
 input_type_var.set(work_info["input_type"])
 output_path.insert(0, work_info["output_file"])
+output_type_var.set(work_info["output_type"])
 
-root.mainloop()
+# ウィンドウの位置とサイズを設定
+root.geometry(work_info["window_geometry"])
+
+# ウィンドウが閉じられる時の処理
+def on_closing():
+    save_work_info(
+        input_path.get(),
+        input_type_var.get(),
+        output_path.get(),
+        output_type_var.get(),
+        root.geometry()
+    )
+    root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
+
+root.mainloop()                                             
